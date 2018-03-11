@@ -6540,59 +6540,73 @@ static void op_check_charger_collapse(struct smb_charger *chg)
 	}
 }
 
+#define ICL_STEP_UA 25000
+#define ICL_USB_MAX 1800000
 static void op_check_charger_uovp(struct smb_charger *chg, int vchg_mv)
 {
-	static int over_volt_count, not_over_volt_count;
-	static bool uovp_satus, pre_uovp_satus;
-	int detect_time = 3; /* 3 x 6s = 18s */
+	static int bad_voltage_cnt;
+	int i, icl_now_ua, ret;
+	bool too_high, too_low;
 
 	if (!chg->vbus_present)
 		return;
 
-	pr_debug("charger_voltage=%d charger_ovp=%d\n", vchg_mv, chg->chg_ovp);
+	too_high = vchg_mv > (CHG_SOFT_OVP_MV + 10);
+	too_low = vchg_mv <= (CHG_SOFT_UVP_MV - 10);
 
-	if (!chg->chg_ovp) {
-		if (vchg_mv > CHG_SOFT_OVP_MV || vchg_mv <= CHG_SOFT_UVP_MV) {
-			pr_err("charger is over voltage, count=%d, voltage %i\n",
-				over_volt_count, vchg_mv);
-			uovp_satus = true;
-			if (pre_uovp_satus)
-				over_volt_count++;
-			else
-				over_volt_count = 0;
-
-			pr_err("uovp_satus=%d,pre_uovp_satus=%d,over_volt_count=%d\n",
-				uovp_satus, pre_uovp_satus, over_volt_count);
-			if (detect_time <= over_volt_count) {
-				/* vchg continuous higher than 5.8v */
-				pr_err("charger is over voltage, stop charging\n");
-				op_charging_en(chg, false);
-				chg->chg_ovp = true;
-			}
-		}
-	} else {
-		if (vchg_mv < CHG_SOFT_OVP_MV - 100
-				&& vchg_mv > CHG_SOFT_UVP_MV + 100) {
-			uovp_satus = false;
-			if (!pre_uovp_satus)
-				not_over_volt_count++;
-			else
-				not_over_volt_count = 0;
-
-			pr_err("uovp_satus=%d, pre_uovp_satus=%d,not_over_volt_count=%d\n",
-				uovp_satus, pre_uovp_satus,
-					not_over_volt_count);
-			if (detect_time <= not_over_volt_count) {
-				/* vchg continuous lower than 5.7v */
-				pr_err("charger voltage is back to normal\n");
-				op_charging_en(chg, true);
-				chg->chg_ovp = false;
-				op_check_battery_temp(chg);
-				smblib_rerun_aicl(chg);
-			}
-		}
+	/* Check if charger voltage is within the safe range */
+	if (!too_high && !too_low) {
+		bad_voltage_cnt = 0;
+		return;
 	}
-	pre_uovp_satus = uovp_satus;
+
+	pr_err("charger voltage: %d mV, outside range (%d mV, %d mV]\n",
+		vchg_mv, CHG_SOFT_UVP_MV, CHG_SOFT_OVP_MV);
+
+	if (bad_voltage_cnt++ == 3) {
+		pr_err("charger voltage is still bad; stop charging\n");
+		op_charging_en(chg, false);
+		bad_voltage_cnt = 0;
+		return;
+	}
+
+	ret = smblib_get_icl_current(chg, &icl_now_ua);
+	if (ret)
+		return;
+
+	/* Perform simple AICL to correct the bad intake voltage */
+	for (i = 1;; i++) {
+		union power_supply_propval vbus_val;
+		int new_icl_ua;
+
+		/* Voltage low => dec current, voltage high => inc current */
+		if (too_low)
+			new_icl_ua = icl_now_ua - (i * ICL_STEP_UA);
+		else
+			new_icl_ua = icl_now_ua + (i * ICL_STEP_UA);
+
+		if (new_icl_ua < ICL_STEP_UA || new_icl_ua > ICL_USB_MAX)
+			break;
+
+		ret = smblib_set_icl_current(chg, new_icl_ua);
+		if (ret == -EINVAL)
+			continue;
+
+		if (ret < 0)
+			break;
+
+		/* Wait for the current change to settle */
+		msleep(10);
+
+		ret = smblib_get_prop_usb_voltage_now(chg, &vbus_val);
+		if (ret < 0)
+			break;
+
+		/* Target 100 mV within the safe threshold */
+		if (vbus_val.intval >= (CHG_SOFT_UVP_MV + 100) &&
+			vbus_val.intval <= (CHG_SOFT_OVP_MV - 100))
+			break;
+	}
 }
 
 #if defined(CONFIG_FB)
