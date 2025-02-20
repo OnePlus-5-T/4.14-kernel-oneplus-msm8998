@@ -32,6 +32,7 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/regulator/of_regulator.h>
+#include <linux/power/oem_external_fg.h>
 
 #define PMIC_VER_8941				0x01
 #define PMIC_VERSION_REG			0x0105
@@ -191,43 +192,6 @@ struct pon_regulator {
 	u32			addr;
 	u32			bit;
 	bool			enabled;
-};
-
-struct qpnp_pon {
-	struct device		*dev;
-	struct regmap		*regmap;
-	struct input_dev	*pon_input;
-	struct qpnp_pon_config	*pon_cfg;
-	struct pon_regulator	*pon_reg_cfg;
-	struct list_head	list;
-	struct delayed_work	bark_work;
-	struct dentry		*debugfs;
-	u16			base;
-	u8			subtype;
-	u8			pon_ver;
-	u8			warm_reset_reason1;
-	u8			warm_reset_reason2;
-	int			num_pon_config;
-	int			num_pon_reg;
-	int			pon_trigger_reason;
-	int			pon_power_off_reason;
-	u32			dbc_time_us;
-	u32			uvlo;
-	int			warm_reset_poff_type;
-	int			hard_reset_poff_type;
-	int			shutdown_poff_type;
-	int			resin_warm_reset_type;
-	int			resin_hard_reset_type;
-	int			resin_shutdown_type;
-	bool			is_spon;
-	bool			store_hard_reset_reason;
-	bool			resin_hard_reset_disable;
-	bool			resin_shutdown_disable;
-	bool			ps_hold_hard_reset_disable;
-	bool			ps_hold_shutdown_disable;
-	bool			kpdpwr_dbc_enable;
-	bool			resin_pon_reset;
-	ktime_t			kpdpwr_last_release_time;
 };
 
 static int pon_ship_mode_en;
@@ -2017,6 +1981,7 @@ static int qpnp_pon_configure_s3_reset(struct qpnp_pon *pon)
 	return 0;
 }
 
+#define PMIC_SID_NUM 3
 static int qpnp_pon_read_hardware_info(struct qpnp_pon *pon, bool sys_reset)
 {
 	struct device *dev = pon->dev;
@@ -2109,6 +2074,15 @@ static int qpnp_pon_read_hardware_info(struct qpnp_pon *pon, bool sys_reset)
 			 to_spmi_device(dev->parent)->usid,
 			 qpnp_poff_reason[index]);
 	}
+
+        if (to_spmi_device(pon->dev->parent)->usid >= 0 &&
+                to_spmi_device(pon->dev->parent)->usid < PMIC_SID_NUM) {
+                //g_pon[to_spmi_device(pon->dev->parent)->usid] = pon;
+                //g_is_cold_boot[to_spmi_device(pon->dev->parent)->usid] =
+                //        cold_boot;
+                if (!to_spmi_device(pon->dev->parent)->usid)
+                        op_pm8998_regmap_register(pon);
+        }
 
 	if ((pon->pon_trigger_reason == PON_SMPL ||
 		pon->pon_power_off_reason == QPNP_POFF_REASON_UVLO) &&
@@ -2203,7 +2177,7 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	unsigned long flags;
 	u32 base, delay;
 	bool sys_reset;
-	int rc;
+	int rc, i, reg;
 
 	pon = devm_kzalloc(dev, sizeof(*pon), GFP_KERNEL);
 	if (!pon)
@@ -2247,6 +2221,17 @@ static int qpnp_pon_probe(struct platform_device *pdev)
 	rc = qpnp_pon_read_hardware_info(pon, sys_reset);
 	if (rc)
 		return rc;
+
+	for (i = 0; i < 16; i++) {
+		rc = regmap_read(pon->regmap, ((pon)->base + 0xC0+i), &reg);
+		dev_info(dev, "(0x%x:0x%x)\n",
+			((pon)->base + 0xC0+i), reg);
+		if (rc) {
+			dev_err(pon->dev, "Unable to read addr=0x%x, rc(%d)\n",
+			((pon)->base + 0xC0+i), rc);
+			return rc;
+		}
+	}
 
 	rc = pon_regulator_init(pon);
 	if (rc)

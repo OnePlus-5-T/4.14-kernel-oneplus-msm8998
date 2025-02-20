@@ -513,21 +513,6 @@ enum plug_orientation usbpd_get_plug_orientation(struct usbpd *pd)
 }
 EXPORT_SYMBOL(usbpd_get_plug_orientation);
 
-static unsigned int get_connector_type(struct usbpd *pd)
-{
-	int ret;
-	union power_supply_propval val;
-
-	ret = power_supply_get_property(pd->usb_psy,
-		POWER_SUPPLY_PROP_CONNECTOR_TYPE, &val);
-
-	if (ret) {
-		dev_err(&pd->dev, "Unable to read CONNECTOR TYPE: %d\n", ret);
-		return ret;
-	}
-	return val.intval;
-}
-
 static inline void stop_usb_host(struct usbpd *pd)
 {
 	extcon_set_state_sync(pd->extcon, EXTCON_USB_HOST, 0);
@@ -1271,8 +1256,8 @@ static bool in_src_ams(struct usbpd *pd)
 	if (pd->spec_rev != USBPD_REV_30)
 		return true;
 
-	power_supply_get_property(pd->usb_psy, POWER_SUPPLY_PROP_TYPEC_SRC_RP,
-			&val);
+//	power_supply_get_property(pd->usb_psy, POWER_SUPPLY_PROP_TYPEC_SRC_RP,
+//			&val);
 
 	return val.intval == 1;
 }
@@ -1287,8 +1272,8 @@ static void start_src_ams(struct usbpd *pd, bool ams)
 	usbpd_dbg(&pd->dev, "Set Rp to %s\n", ams ? "1.5A" : "3A");
 
 	val.intval = ams ? 1 : 2; /* SinkTxNG / SinkTxOK */
-	power_supply_set_property(pd->usb_psy, POWER_SUPPLY_PROP_TYPEC_SRC_RP,
-			&val);
+//	power_supply_set_property(pd->usb_psy, POWER_SUPPLY_PROP_TYPEC_SRC_RP,
+//			&val);
 
 	if (ams)
 		kick_sm(pd, SINK_TX_TIME);
@@ -1385,15 +1370,13 @@ static void usbpd_set_state(struct usbpd *pd, enum usbpd_state next_state)
 
 		dual_role_instance_changed(pd->dual_role);
 
-		val.intval = 1; /* Rp-1.5A; SinkTxNG for PD 3.0 */
-		power_supply_set_property(pd->usb_psy,
-				POWER_SUPPLY_PROP_TYPEC_SRC_RP, &val);
-
 		/* Set CC back to DRP toggle for the next disconnect */
 		val.intval = POWER_SUPPLY_TYPEC_PR_DUAL;
 		power_supply_set_property(pd->usb_psy,
 				POWER_SUPPLY_PROP_TYPEC_POWER_ROLE, &val);
 
+		/* support only PD 2.0 as a source */
+		pd->spec_rev = USBPD_REV_20;
 		pd_reset_protocol(pd);
 
 		if (!pd->in_pr_swap) {
@@ -4661,11 +4644,6 @@ struct usbpd *usbpd_create(struct device *parent)
 	pd->dr_desc.get_property = usbpd_dr_get_property;
 	pd->dr_desc.set_property = usbpd_dr_set_property;
 	pd->dr_desc.property_is_writeable = usbpd_dr_prop_writeable;
-
-	ret = get_connector_type(pd);
-
-	if (ret < 0)
-		goto put_psy;
 
 	/* For non-TypeC connector, it will be handled elsewhere */
 	if (ret != POWER_SUPPLY_CONNECTOR_MICRO_USB) {

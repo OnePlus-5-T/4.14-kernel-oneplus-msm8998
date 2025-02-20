@@ -57,38 +57,6 @@
 const union power_supply_propval otg_on = {1,};
 const union power_supply_propval otg_off = {0,};
 
-struct qpnp_pon {
-        struct platform_device  *pdev;
-        struct regmap           *regmap;
-        struct input_dev        *pon_input;
-        struct qpnp_pon_config  *pon_cfg;
-        struct pon_regulator    *pon_reg_cfg;
-        struct list_head        list;
-        struct delayed_work     bark_work;
-        struct delayed_work     press_work;
-        struct work_struct  up_work;
-        atomic_t       press_count;
-        struct dentry           *debugfs;
-        int                     pon_trigger_reason;
-        int                     pon_power_off_reason;
-        int                     num_pon_reg;
-        int                     num_pon_config;
-        u32                     dbc_time_us;
-        u32                     uvlo;
-        int                     warm_reset_poff_type;
-        int                     hard_reset_poff_type;
-        int                     shutdown_poff_type;
-        u16                     base;
-        u8                      subtype;
-        u8                      pon_ver;
-        u8                      warm_reset_reason1;
-        u8                      warm_reset_reason2;
-        bool                    is_spon;
-        bool                    store_hard_reset_reason;
-        bool                    kpdpwr_dbc_enable;
-        ktime_t                 kpdpwr_last_release_time;
-};
-
 struct smb_charger *g_chg;
 struct qpnp_pon *pm_pon;
 
@@ -2225,6 +2193,20 @@ int smblib_get_prop_charge_qnovo_enable(struct smb_charger *chg,
 
 	val->intval = (bool)(stat & QNOVO_PT_ENABLE_CMD_BIT);
 	return 0;
+}
+
+int smblib_get_prop_from_bms(struct smb_charger *chg,
+                                enum power_supply_property psp,
+                                union power_supply_propval *val)
+{
+        int rc;
+
+        if (!chg->bms_psy)
+                return -EINVAL;
+
+        rc = power_supply_get_property(chg->bms_psy, psp, val);
+
+        return rc;
 }
 
 int smblib_get_prop_batt_charge_counter(struct smb_charger *chg,
@@ -7026,8 +7008,10 @@ static int load_data(struct smb_charger *chg)
 		return SOC_INVALID;
 	}
 	flag = op_read_backup_flag(chg);
-	if (!flag)
+	if (!flag) {
+		pr_err("chg is NULL2 !\n");
 		return SOC_INVALID;
+	};
 
 	rc = smblib_read(chg, SOC_DATA_REG_0, &stored_soc);
 	if (rc) {
@@ -7044,7 +7028,7 @@ static int load_data(struct smb_charger *chg)
 	else
 		shutdown_soc = SOC_INVALID;
 
-	pr_info("stored_soc[0x%x], shutdown_soc[%d]\n",
+	pr_err("stored_soc[0x%x], shutdown_soc[%d]\n",
 		stored_soc, shutdown_soc);
 	return shutdown_soc;
 }

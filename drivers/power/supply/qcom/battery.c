@@ -181,10 +181,6 @@ static int cp_get_parallel_mode(struct pl_data *chip, int mode)
 		rc = power_supply_get_property(chip->cp_master_psy,
 				POWER_SUPPLY_PROP_PARALLEL_MODE, &pval);
 		break;
-	case PARALLEL_OUTPUT_MODE:
-		rc = power_supply_get_property(chip->cp_master_psy,
-				POWER_SUPPLY_PROP_PARALLEL_OUTPUT_MODE, &pval);
-		break;
 	default:
 		pr_err("Invalid mode request %d\n", mode);
 		break;
@@ -635,43 +631,6 @@ static void get_fcc_split(struct pl_data *chip, int total_ua,
 		if (chip->main_fcc_max)
 			*master_ua = min(*master_ua, chip->main_fcc_max);
 	}
-}
-
-static void get_main_fcc_config(struct pl_data *chip, int *total_fcc)
-{
-	union power_supply_propval pval = {0, };
-	int rc;
-
-	if (!is_cp_available(chip))
-		goto out;
-
-	rc = power_supply_get_property(chip->cp_master_psy,
-			POWER_SUPPLY_PROP_CP_SWITCHER_EN, &pval);
-	if (rc < 0) {
-		pr_err("Couldn't get switcher enable status, rc=%d\n", rc);
-		goto out;
-	}
-
-	if (!pval.intval) {
-		/*
-		 * To honor main charger upper FCC limit, on CP switcher
-		 * disable, skip fcc slewing as it will cause delay in limiting
-		 * the charge current flowing through main charger.
-		 */
-		if (!chip->cp_disabled) {
-			chip->fcc_stepper_enable = false;
-			pl_dbg(chip, PR_PARALLEL,
-				"Disabling FCC slewing on CP Switcher disable\n");
-		}
-		chip->cp_disabled = true;
-	} else {
-		chip->cp_disabled = false;
-		pl_dbg(chip, PR_PARALLEL,
-			"CP Switcher is enabled, don't limit main fcc\n");
-		return;
-	}
-out:
-	*total_fcc = min(*total_fcc, chip->main_fcc_max);
 }
 
 static void get_fcc_stepper_params(struct pl_data *chip, int main_fcc_ua,
@@ -1209,31 +1168,6 @@ static int pl_fv_vote_callback(struct votable *votable, void *data,
 		}
 	}
 
-	/*
-	 * check for termination at reduced float voltage and re-trigger
-	 * charging if new float voltage is above last FV.
-	 */
-	if ((chip->float_voltage_uv < fv_uv) && is_batt_available(chip)) {
-		rc = power_supply_get_property(chip->batt_psy,
-				POWER_SUPPLY_PROP_STATUS, &pval);
-		if (rc < 0) {
-			pr_err("Couldn't get battery status rc=%d\n", rc);
-		} else {
-			if (pval.intval == POWER_SUPPLY_STATUS_FULL) {
-				pr_debug("re-triggering charging\n");
-				pval.intval = 1;
-				rc = power_supply_set_property(chip->batt_psy,
-					POWER_SUPPLY_PROP_FORCE_RECHARGE,
-					&pval);
-				if (rc < 0)
-					pr_err("Couldn't set force recharge rc=%d\n",
-							rc);
-			}
-		}
-	}
-
-	chip->float_voltage_uv = fv_uv;
-
 	return 0;
 }
 
@@ -1356,16 +1290,6 @@ static int pl_disable_vote_callback(struct votable *votable,
 	}
 	chip->fcc_stepper_enable = pval.intval;
 	pr_debug("FCC Stepper %s\n", pval.intval ? "enabled" : "disabled");
-
-	rc = power_supply_get_property(chip->main_psy,
-			POWER_SUPPLY_PROP_MAIN_FCC_MAX, &pval);
-	if (rc < 0) {
-		pl_dbg(chip, PR_PARALLEL,
-			"Couldn't read primary charger FCC upper limit, rc=%d\n",
-			rc);
-	} else if (pval.intval > 0) {
-		chip->main_fcc_max = pval.intval;
-	}
 
 	if (chip->fcc_stepper_enable) {
 		cancel_delayed_work_sync(&chip->fcc_stepper_work);
@@ -1492,8 +1416,9 @@ static int pl_disable_vote_callback(struct votable *votable,
 			(master_fcc_ua * 100) / total_fcc_ua,
 			(slave_fcc_ua * 100) / total_fcc_ua);
 	} else {
-		if (chip->main_fcc_max)
-			get_main_fcc_config(chip, &total_fcc_ua);
+		if ((chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+			|| (chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			split_settled(chip);
 
 		if (!chip->fcc_stepper_enable) {
 			if (IS_USBIN(chip->pl_mode))
