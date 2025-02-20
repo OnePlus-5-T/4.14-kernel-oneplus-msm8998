@@ -33,6 +33,7 @@ enum print_reason {
 	PR_MISC		= BIT(2),
 	PR_PARALLEL	= BIT(3),
 	PR_OTG		= BIT(4),
+	PR_OP_DEBUG	= BIT(5),
 };
 
 #define BATT_TYPE_FCC_VOTER		"BATT_TYPE_FCC_VOTER"
@@ -88,6 +89,7 @@ enum print_reason {
 #define WEAK_CHARGER_VOTER		"WEAK_CHARGER_VOTER"
 #define WBC_VOTER			"WBC_VOTER"
 #define OV_VOTER			"OV_VOTER"
+#define FG_ESR_VOTER			"FG_ESR_VOTER"
 #define FCC_STEPPER_VOTER		"FCC_STEPPER_VOTER"
 
 #define VCONN_MAX_ATTEMPTS	3
@@ -717,6 +719,9 @@ int smblib_get_icl_current(struct smb_charger *chg, int *icl_ua);
 int smblib_get_charge_current(struct smb_charger *chg, int *total_current_ua);
 int smblib_get_prop_pr_swap_in_progress(struct smb_charger *chg,
 				union power_supply_propval *val);
+int smblib_get_prop_from_bms(struct smb_charger *chg,
+                                enum power_supply_property psp,
+                                union power_supply_propval *val);
 int smblib_set_prop_pr_swap_in_progress(struct smb_charger *chg,
 				const union power_supply_propval *val);
 int smblib_stat_sw_override_cfg(struct smb_charger *chg, bool override);

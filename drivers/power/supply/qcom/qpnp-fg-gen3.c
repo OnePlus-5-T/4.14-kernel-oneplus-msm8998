@@ -3269,11 +3269,6 @@ end_work:
 	mutex_unlock(&chip->ttf.lock);
 }
 
-static int fg_get_prop_real_capacity(struct fg_dev *fg, int *val)
-{
-        return fg_get_msoc(fg, val);
-}
-
 /* PSY CALLBACKS STAY HERE */
 
 static int fg_psy_get_property(struct power_supply *psy,
@@ -3282,7 +3277,7 @@ static int fg_psy_get_property(struct power_supply *psy,
 {
 	struct fg_gen3_chip *chip = power_supply_get_drvdata(psy);
 	struct fg_dev *fg = &chip->fg;
-	int val, rc = 0;
+	int rc = 0;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CAPACITY:
@@ -3426,13 +3421,6 @@ static int fg_psy_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CC_STEP_SEL:
 		pval->intval = chip->ttf.cc_step.sel;
 		break;
-	case POWER_SUPPLY_PROP_CC_SOC:
-		rc = fg_get_sram_prop(&chip->fg, FG_SRAM_CC_SOC, &val);
-		if (rc < 0) {
-			pr_err("Error in getting CC_SOC, rc=%d\n", rc);
-			return rc;
-		}
-		break;
         case POWER_SUPPLY_PROP_BQ_SOC:
 		if (chip->use_external_fg && external_fg
 			&& external_fg->get_batt_bq_soc)
@@ -3452,8 +3440,11 @@ static int fg_psy_get_property(struct power_supply *psy,
         case POWER_SUPPLY_PROP_FG_CURRENT_NOW:
 		rc = fg_get_battery_current(&chip->fg, &pval->intval);
 		break;
-	case POWER_SUPPLY_PROP_REAL_CAPACITY:
-		rc = fg_get_prop_real_capacity(&chip->fg, &pval->intval);
+	case POWER_SUPPLY_PROP_FG_RESET_CLOCK:
+		pval->intval = 0;
+		break;
+	case POWER_SUPPLY_PROP_TIME_TO_FULL_NOW:
+		rc = fg_get_time_to_full(fg, &pval->intval);
 		break;
 	default:
 		pr_err("unsupported property %d\n", psp);
@@ -3657,15 +3648,16 @@ static enum power_supply_property fg_psy_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW,
 	POWER_SUPPLY_PROP_TIME_TO_FULL_AVG,
 	POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
+	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_SOC_REPORTING_READY,
 	POWER_SUPPLY_PROP_DEBUG_BATTERY,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE,
 	POWER_SUPPLY_PROP_CC_STEP,
 	POWER_SUPPLY_PROP_CC_STEP_SEL,
-	POWER_SUPPLY_PROP_CC_SOC,
 	POWER_SUPPLY_PROP_SET_ALLOW_READ_EXTERN_FG_IIC,
 	POWER_SUPPLY_PROP_BQ_SOC,
 	POWER_SUPPLY_PROP_BATTERY_HEALTH,
+	POWER_SUPPLY_PROP_FG_RESET_CLOCK,
 };
 
 static const struct power_supply_desc fg_psy_desc = {
