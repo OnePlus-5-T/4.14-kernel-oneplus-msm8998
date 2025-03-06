@@ -567,13 +567,11 @@ static int smb2_usb_get_prop(struct power_supply *psy,
 		val->intval = chg->otg_switch;
 		break;
 	case POWER_SUPPLY_PROP_TYPEC_POWER_ROLE:
-                if (chg->micro_usb_mode)
-                        val->intval = POWER_SUPPLY_TYPEC_NONE;
-                else if (chip->bad_part)
-                        val->intval = POWER_SUPPLY_TYPEC_SOURCE_DEFAULT;
-                else
-                        val->intval = chg->typec_mode;
-                break;
+		if (chg->micro_usb_mode)
+			val->intval = POWER_SUPPLY_TYPEC_NONE;
+		else
+			rc = smblib_get_prop_typec_power_role(chg, val);
+		break;
 	case POWER_SUPPLY_PROP_TYPEC_CC_ORIENTATION:
 	case POWER_SUPPLY_PROP_OEM_TYPEC_CC_ORIENTATION:
 		if (chg->micro_usb_mode)
