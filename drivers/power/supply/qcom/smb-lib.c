@@ -1250,6 +1250,9 @@ static int __smblib_set_prop_typec_power_role(struct smb_charger *chg,
 		return -EINVAL;
 	}
 
+	if (!chg->otg_switch)
+		power_role = UFP_EN_CMD_BIT;
+
 	if (chg->wa_flags & TYPEC_PBS_WA_BIT) {
 		if (power_role == UFP_EN_CMD_BIT) {
 			/* disable PBS workaround when forcing sink mode */
@@ -4272,7 +4275,8 @@ static void smblib_force_legacy_icl(struct smb_charger *chg, int pst)
 		*/
 		if (!is_client_vote_enabled(chg->usb_icl_votable,
 			USB_PSY_VOTER))
-		vote(chg->usb_icl_votable, USB_PSY_VOTER, true, 500000);
+			vote(chg->usb_icl_votable, USB_PSY_VOTER, true, 500000);
+
 		vote(chg->usb_icl_votable, LEGACY_UNKNOWN_VOTER, false, 0);
 		break;
 	case POWER_SUPPLY_TYPE_USB_CDP:
