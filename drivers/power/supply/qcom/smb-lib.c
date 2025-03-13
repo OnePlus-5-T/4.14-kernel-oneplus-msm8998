@@ -84,8 +84,6 @@ static int get_prop_fg_voltage_now(struct smb_charger *chg);
 static void op_check_charger_collapse(struct smb_charger *chg);
 static int op_set_collapse_fet(struct smb_charger *chg, bool on);
 
-static int disable_voltage_check = 0;
-
 #define smblib_err(chg, fmt, ...)		\
 	pr_err("%s: %s: " fmt, chg->name,	\
 		__func__, ##__VA_ARGS__)	\
@@ -6893,9 +6891,7 @@ static void op_heartbeat_work(struct work_struct *work)
 							msecs_to_jiffies(100));
 	}
 
-	if (!disable_voltage_check) {
-		op_check_charger_uovp(chg, vbus_val.intval);
-	}
+	op_check_charger_uovp(chg, vbus_val.intval);
 	op_check_battery_uovp(chg);
 	if (vbus_val.intval > 4500)
 		op_check_charger_collapse(chg);
@@ -7892,44 +7888,6 @@ static void smblib_iio_deinit(struct smb_charger *chg)
 		iio_channel_release(chg->iio.batt_i_chan);
 }
 
-static ssize_t disable_voltage_check_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	return sprintf(buf, "%d\n", disable_voltage_check);
-}
-
-static ssize_t disable_voltage_check_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
-{
-	int value;
-
-	if (sscanf(buf, "%d", &value) != 1)
-		return -EINVAL;
-
-	if (value != 0 && value != 1)
-		return -EINVAL;
-
-	disable_voltage_check = value;
-
-	if (disable_voltage_check && g_chg->chg_ovp) {
-		op_charging_en(g_chg, true);
-		g_chg->chg_ovp = false;
-		op_check_battery_temp(g_chg);
-		smblib_rerun_aicl(g_chg);
-	}
-
-	return count;
-}
-
-static DEVICE_ATTR(disable_voltage_check, S_IRUGO | S_IWUSR, disable_voltage_check_show, disable_voltage_check_store);
-
-static struct attribute *smb_lib_attrs[] = {
-	&dev_attr_disable_voltage_check.attr,
-	NULL,
-};
-
-static struct attribute_group smb_lib_attr_group = {
-	.attrs = smb_lib_attrs,
-};
-
 int smblib_init(struct smb_charger *chg)
 {
 	int rc = 0;
@@ -8030,8 +7988,6 @@ int smblib_init(struct smb_charger *chg)
 	// Enable otg feature on init
 	op_set_prop_otg_switch(chg, &otg_on);
 
-	rc = sysfs_create_group(&chg->dev->kobj, &smb_lib_attr_group);
-
 	return rc;
 }
 
@@ -8054,7 +8010,6 @@ int smblib_deinit(struct smb_charger *chg)
 
 	smblib_iio_deinit(chg);
 
-	sysfs_remove_group(&chg->dev->kobj, &smb_lib_attr_group);
 	notify_dash_unplug_unregister(&notify_unplug_event);
 	return 0;
 }
