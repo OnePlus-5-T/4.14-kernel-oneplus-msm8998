@@ -5289,7 +5289,7 @@ static bool get_prop_fast_switch_to_normal(struct smb_charger *chg)
 
 bool is_fastchg_allowed(struct smb_charger *chg)
 {
-	int temp;
+	int temp, ret, icl_now_ua = 0;
 	static int pre_temp;
 	static bool pre_switch_to_normal;
 	bool low_temp_full, switch_to_normal, fw_updated;
@@ -5310,8 +5310,17 @@ bool is_fastchg_allowed(struct smb_charger *chg)
 	}
 
 	switch_to_normal = get_prop_fast_switch_to_normal(chg);
-	if (pre_switch_to_normal != switch_to_normal)
+	if (pre_switch_to_normal != switch_to_normal) {
 		pr_info("switch_to_normal =%d\n", switch_to_normal);
+		ret = smblib_get_icl_current(chg, &icl_now_ua);
+	        /* Enable overrides if needed */
+		if (ret == INT_MAX) {
+			smblib_icl_override(chg, true);
+			ret = smblib_get_icl_current(chg, &icl_now_ua);
+		}
+
+		pr_err("current set to: %i", icl_now_ua);
+	}
 	if (switch_to_normal)
 		return false;
 
@@ -6561,7 +6570,7 @@ static void op_check_charger_uovp(struct smb_charger *chg, int vchg_mv)
 	pr_err("charger voltage: %d mV, outside range (%d mV, %d mV]\n",
 		vchg_mv, CHG_SOFT_UVP_MV, CHG_SOFT_OVP_MV);
 
-	if (bad_voltage_cnt++ == 3) {
+	if (bad_voltage_cnt++ == 5) {
 		pr_err("charger voltage is still bad; stop charging\n");
 		op_charging_en(chg, false);
 		bad_voltage_cnt = 0;
@@ -6569,6 +6578,12 @@ static void op_check_charger_uovp(struct smb_charger *chg, int vchg_mv)
 	}
 
 	ret = smblib_get_icl_current(chg, &icl_now_ua);
+        /* Enable overrides if needed */
+        if (ret == INT_MAX) {
+                smblib_icl_override(chg, true);
+                ret = smblib_get_icl_current(chg, &icl_now_ua);
+        }
+
 	if (ret)
 		return;
 
