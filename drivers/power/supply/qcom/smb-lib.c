@@ -2761,6 +2761,84 @@ int smblib_get_prop_typec_cc_orientation(struct smb_charger *chg,
 	return 0;
 }
 
+#define ICL_STEP_UA 25000
+#define ICL_USB_MAX 1800000
+static void op_check_charger_uovp(struct smb_charger *chg, int vchg_mv)
+{
+	static int bad_voltage_cnt;
+	int i, icl_now_ua, ret;
+	bool too_high, too_low;
+
+	if (!chg->vbus_present)
+		return;
+
+	too_high = vchg_mv > (CHG_SOFT_OVP_MV + 10);
+	too_low = vchg_mv <= (CHG_SOFT_UVP_MV - 10);
+
+	/* Check if charger voltage is within the safe range */
+	if (!too_high && !too_low) {
+		bad_voltage_cnt = 0;
+		return;
+	}
+
+	pr_err("charger voltage: %d mV, outside range (%d mV, %d mV]\n",
+		vchg_mv, CHG_SOFT_UVP_MV, CHG_SOFT_OVP_MV);
+
+	if (bad_voltage_cnt++ == 5) {
+		pr_err("charger voltage is still bad; stop charging\n");
+		op_charging_en(chg, false);
+		bad_voltage_cnt = 0;
+		return;
+	}
+
+	ret = smblib_get_icl_current(chg, &icl_now_ua);
+	/* Enable overrides if needed */
+	if (ret == INT_MAX) {
+		smblib_icl_override(chg, true);
+		ret = smblib_get_icl_current(chg, &icl_now_ua);
+		smblib_icl_override(chg, false);
+	}
+
+	if (ret)
+		return;
+
+	/* Perform simple AICL to correct the bad intake voltage */
+	for (i = 1;; i++) {
+		union power_supply_propval vbus_val;
+		int new_icl_ua;
+
+		/* Voltage low => dec current, voltage high => inc current */
+		if (too_low)
+			new_icl_ua = icl_now_ua - (i * ICL_STEP_UA);
+		else
+			new_icl_ua = icl_now_ua + (i * ICL_STEP_UA);
+
+		if (new_icl_ua < ICL_STEP_UA || new_icl_ua > ICL_USB_MAX)
+			break;
+
+		ret = smblib_set_icl_current(chg, new_icl_ua);
+		if (ret == -EINVAL)
+			continue;
+
+		if (ret < 0)
+			break;
+
+		/* Wait for the current change to settle */
+		msleep(20);
+
+		ret = smblib_get_prop_usb_voltage_now(chg, &vbus_val);
+		if (ret < 0)
+			break;
+
+		/* Target 100 mV within the safe threshold */
+		if (vbus_val.intval >= (CHG_SOFT_UVP_MV + 100) &&
+			vbus_val.intval <= (CHG_SOFT_OVP_MV - 100)) {
+				op_charging_en(chg, true);
+				break;
+		}
+	}
+}
+
 static const char * const smblib_typec_mode_name[] = {
 	[POWER_SUPPLY_TYPEC_NONE]		  = "NONE",
 	[POWER_SUPPLY_TYPEC_SOURCE_DEFAULT]	  = "SOURCE_DEFAULT",
@@ -5293,6 +5371,7 @@ bool is_fastchg_allowed(struct smb_charger *chg)
 	static int pre_temp;
 	static bool pre_switch_to_normal;
 	bool low_temp_full, switch_to_normal, fw_updated;
+	union power_supply_propval vbus_val;
 
 	temp = get_prop_batt_temp(chg);
 	low_temp_full = op_get_fast_low_temp_full(chg);
@@ -5324,6 +5403,10 @@ bool is_fastchg_allowed(struct smb_charger *chg)
 			smblib_set_icl_current(chg, CDP_CURRENT_UA);
 			op_charging_en(chg, true);
 		}
+		msleep(50);
+
+		smblib_get_prop_usb_voltage_now(chg, &vbus_val);
+		op_check_charger_uovp(chg, vbus_val.intval);
 	}
 
 	if (switch_to_normal)
@@ -5814,27 +5897,25 @@ static void op_recovery_usb_suspend_work(struct work_struct *work)
 	struct smb_charger *chg = container_of(work,
 			struct smb_charger,
 			recovery_suspend_work.work);
-		int effect_result;
 
-		if (chg->recovery_boost_count >= BOOST_BACK_COUNT) {
-			pr_info("recovery revert boost\n");
-			vote(chg->usb_icl_votable, BOOST_BACK_VOTER, false, 0);
-			if (is_usb_present(chg)) {
-				effect_result =
-				get_effective_result(chg->usb_icl_votable);
-				pr_info("effect_result=%d\n", effect_result);
-				if (effect_result > DEFAULT_AGAING_CHG_MA*1000)
-					vote(chg->usb_icl_votable, DCP_VOTER,
-					true, (effect_result - USBIN_150MA));
-			}
-			msleep(1000);
-			chg->revert_boost_trigger = false;
-		} else {
-			chg->recovery_boost_count++;
-			schedule_delayed_work(&chg->recovery_suspend_work,
-					msecs_to_jiffies(TIME_100MS));
+	union power_supply_propval vbus_val;
+
+	if (chg->recovery_boost_count >= BOOST_BACK_COUNT) {
+		pr_info("recovery revert boost\n");
+		vote(chg->usb_icl_votable, BOOST_BACK_VOTER, false, 0);
+		if (is_usb_present(chg)) {
+			smblib_get_prop_usb_voltage_now(chg, &vbus_val);
+			op_check_charger_uovp(chg, vbus_val.intval);
 		}
+		msleep(1000);
+		chg->revert_boost_trigger = false;
+	} else {
+		chg->recovery_boost_count++;
+		schedule_delayed_work(&chg->recovery_suspend_work,
+				msecs_to_jiffies(TIME_100MS));
+	}
 }
+
 static void op_check_allow_switch_dash_work(struct work_struct *work)
 {
 	struct delayed_work *dwork = to_delayed_work(work);
@@ -6552,83 +6633,7 @@ static void op_check_charger_collapse(struct smb_charger *chg)
 	}
 }
 
-#define ICL_STEP_UA 25000
-#define ICL_USB_MAX 1800000
-static void op_check_charger_uovp(struct smb_charger *chg, int vchg_mv)
-{
-	static int bad_voltage_cnt;
-	int i, icl_now_ua, ret;
-	bool too_high, too_low;
 
-	if (!chg->vbus_present)
-		return;
-
-	too_high = vchg_mv > (CHG_SOFT_OVP_MV + 10);
-	too_low = vchg_mv <= (CHG_SOFT_UVP_MV - 10);
-
-	/* Check if charger voltage is within the safe range */
-	if (!too_high && !too_low) {
-		bad_voltage_cnt = 0;
-		return;
-	}
-
-	pr_err("charger voltage: %d mV, outside range (%d mV, %d mV]\n",
-		vchg_mv, CHG_SOFT_UVP_MV, CHG_SOFT_OVP_MV);
-
-	if (bad_voltage_cnt++ == 5) {
-		pr_err("charger voltage is still bad; stop charging\n");
-		op_charging_en(chg, false);
-		bad_voltage_cnt = 0;
-		return;
-	}
-
-	ret = smblib_get_icl_current(chg, &icl_now_ua);
-	/* Enable overrides if needed */
-	if (ret == INT_MAX) {
-		smblib_icl_override(chg, true);
-		ret = smblib_get_icl_current(chg, &icl_now_ua);
-		smblib_icl_override(chg, false);
-	}
-
-	if (ret)
-		return;
-
-	/* Perform simple AICL to correct the bad intake voltage */
-	for (i = 1;; i++) {
-		union power_supply_propval vbus_val;
-		int new_icl_ua;
-
-		/* Voltage low => dec current, voltage high => inc current */
-		if (too_low)
-			new_icl_ua = icl_now_ua - (i * ICL_STEP_UA);
-		else
-			new_icl_ua = icl_now_ua + (i * ICL_STEP_UA);
-
-		if (new_icl_ua < ICL_STEP_UA || new_icl_ua > ICL_USB_MAX)
-			break;
-
-		ret = smblib_set_icl_current(chg, new_icl_ua);
-		if (ret == -EINVAL)
-			continue;
-
-		if (ret < 0)
-			break;
-
-		/* Wait for the current change to settle */
-		msleep(20);
-
-		ret = smblib_get_prop_usb_voltage_now(chg, &vbus_val);
-		if (ret < 0)
-			break;
-
-		/* Target 100 mV within the safe threshold */
-		if (vbus_val.intval >= (CHG_SOFT_UVP_MV + 100) &&
-			vbus_val.intval <= (CHG_SOFT_OVP_MV - 100)) {
-				op_charging_en(chg, true);
-				break;
-		}
-	}
-}
 
 #if defined(CONFIG_FB)
 static int fb_notifier_callback(struct notifier_block *self,
