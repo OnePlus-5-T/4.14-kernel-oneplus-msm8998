@@ -7582,26 +7582,25 @@ static inline int select_idle_sibling_cstate_aware(struct task_struct *p, int pr
 				if (cpu_isolated(i))
 					continue;
 
-				/* figure out if the task can fit here at all */
 				new_usage = boosted_task_util(p);
-				capacity_orig = capacity_orig_of(i);
-
-				if (new_usage > capacity_orig)
-					goto next;
-
 				util_min = uclamp_eff_value(p, UCLAMP_MIN);
 				util_max = uclamp_eff_value(p, UCLAMP_MAX);
+
+				/* figure out if the task can fit here at all */
+				if (!util_fits_cpu(p, new_usage, util_min, util_max, i))
+					goto next;
 
 				/* if the task fits without changing OPP and we
 				 * intended to use this CPU, just proceed
 				 */
-				if (i == target && util_fits_cpu(p, new_usage, util_min, util_max, i))
+				if (i == target)
 					return target;
 
 				/* otherwise select CPU with shallowest idle state
 				 * to reduce wakeup latency.
 				 */
 				idle_idx = idle_get_state_idx(cpu_rq(i));
+				capacity_orig = capacity_orig_of(i);
 
 				if (idle_idx < best_idle_cstate &&
 					capacity_orig <= best_idle_capacity) {
